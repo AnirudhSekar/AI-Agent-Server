@@ -2,7 +2,6 @@
 from typing import Dict, TypedDict
 from agents.email_agent import email_summarization_agent, email_reply_agent
 from agents.calendar_agent import calendar_scheduler_agent
-from agents.budget_agent import budget_tracker_agent
 from agents.reasoning_agent import reasoning_agent
 from langgraph.graph.state import StateGraph
 
@@ -26,11 +25,10 @@ def create_workflow() -> StateGraph:
     workflow.add_node("ReasoningAgent", reasoning_agent)
     workflow.add_node("EmailReply", email_reply_agent)
     workflow.add_node("CalendarScheduler", calendar_scheduler_agent)
-    workflow.add_node("BudgetTracker", budget_tracker_agent)
 
     # Entry and exit
     workflow.set_entry_point("EmailSummarization")
-    workflow.set_finish_point("BudgetTracker")
+    workflow.set_finish_point("CalendarScheduler")
 
     # Flow: EmailSummarization -> Reasoning
     workflow.add_edge("EmailSummarization", "ReasoningAgent")
@@ -46,10 +44,8 @@ def create_workflow() -> StateGraph:
         }
     )
 
-    # Always Calendar → Reply → Budget
+    # Always Calendar → Reply
     workflow.add_edge("CalendarScheduler", "EmailReply")
-    workflow.add_edge("EmailReply", "BudgetTracker")
-
     return workflow
 
 
