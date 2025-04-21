@@ -1,6 +1,6 @@
 # agents/budget_agent.py
 from typing import Dict
-from backend.tools.calendar_tools import write_invoice
+from tools.calendar_tools import write_invoice
 
 def budget_tracker_agent(state: Dict) -> Dict:
     """

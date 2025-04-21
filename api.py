@@ -1,103 +1,117 @@
 # backend/api.py
+
 import logging
 import asyncio
-from fastapi import APIRouter, Request, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel
 from typing import List, Dict
-from backend.state_graph import run_workflow
-from backend.agents.email_agent import email_summarization_agent
-from backend.tools.gmail_tools import get_gmail_inbox, authenticate_gmail
+from state_graph import run_workflow
+from agents.email_agent import email_summarization_agent
+from tools.gmail_tools import get_gmail_inbox, authenticate_gmail
 
 router = APIRouter()
 latest_result: Dict = {}
 
-class WorkflowRequest(BaseModel):
-    inbox: List[Dict]  # Inbox from external request (manual sync)
+# Configure logging to see the process clearly in development
+logging.basicConfig(
+    level=logging.INFO,  # Adjust logging level as needed
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
 
-@router.on_event("startup")
-async def schedule_background_task():
+class WorkflowRequest(BaseModel):
+    inbox: List[Dict]  # Inbox data provided in the request
+
+def schedule_background_task(app):
+    """
+    Schedules a background task that polls Gmail inbox and triggers the workflow.
+    Runs every 10 minutes to ensure the latest data is available.
+    """
+    @app.on_event("startup")
     async def poll_loop():
         while True:
             try:
                 logging.info("⏳ Fetching Gmail inbox & running workflow…")
-                # Get Gmail inbox with auto authentication handling
-                inbox = get_gmail_inbox(max_results=10)  # You can customize the max_results
-                latest_result.clear()
-                latest = run_workflow(inbox)
-                latest_result.update(latest)
-                logging.info("✅ Workflow result: %s", latest)
+                inbox = get_gmail_inbox(max_results=1)  # Fetch one email for testing
+                if inbox:
+                    logging.info(f"Fetched inbox: {inbox}")
+                    latest_result.clear()
+                    result = run_workflow(inbox)
+                    latest_result.update(result)
+                    logging.info(f"✅ Workflow result: {latest_result}")
+                    break
+                else:
+                    logging.warning("⚠️ No emails fetched, skipping workflow run.")
             except Exception as e:
-                logging.error("❌ Scheduled run failed: %s", e)
-            await asyncio.sleep(300)  # Wait 5 minutes before running again
-
-    # Start background task for polling
-    asyncio.create_task(poll_loop())
-
+                logging.error(f"❌ Error while fetching inbox or running workflow: {str(e)}")
 @router.get("/last-result")
-async def get_last_result():
+def get_last_result():
     """
-    Get the most recent workflow result from the 5-minute polling.
+    Returns the most recent workflow result from the background polling.
+    If no result is available, informs the user to wait.
     """
+    global latest_result
+    
     if not latest_result:
+        logging.warning("No result available yet.")
         return {"message": "No data yet – please wait for the first run."}
+    
+    logging.info(f"Returning latest result: {latest_result}")
     return latest_result
 
 @router.post("/run-workflow")
 async def run_full_workflow(req: WorkflowRequest):
     """
     Manually trigger the workflow with a custom inbox payload.
+    Useful for testing or triggering the workflow on demand.
     """
     try:
         inbox = req.inbox
+        logging.info(f"Manually triggering workflow with inbox: {inbox}")
         result = run_workflow(inbox)
+        logging.info(f"✅ Workflow result: {result}")
         return result
     except Exception as e:
-        logging.error("❌ Manual run failed: %s", e)
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Internal server error", "details": str(e)},
-        )
+        logging.error(f"❌ Manual run failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.get("/sync-gmail")
 async def sync_gmail_inbox():
     """
-    Sync Gmail inbox, run workflow, and return the result.
-    This route allows manual sync and runs the workflow based on Gmail inbox.
+    Manually sync Gmail inbox and run the workflow based on the fetched emails.
+    This endpoint is used to trigger a sync without waiting for the background task.
     """
     try:
-        # Ensure Gmail authentication
-        inbox = get_gmail_inbox()  # Fetch inbox after authenticating
+        logging.info("⏳ Manually syncing Gmail inbox…")
+        inbox = get_gmail_inbox()  # Sync inbox directly (make sure this is authenticated)
+        
+        if not inbox:
+            logging.warning("⚠️ No emails fetched during Gmail sync.")
+            return JSONResponse(status_code=404, content={"error": "No emails found in inbox"})
+        
+        logging.info(f"Fetched inbox: {inbox}")
         result = run_workflow(inbox)
         global latest_result
         latest_result = result
-        logging.info("✅ Gmail sync completed successfully")
+        logging.info("✅ Gmail sync completed and workflow result obtained.")
         return result
     except Exception as e:
-        logging.error("❌ Gmail sync failed: %s", str(e))
+        logging.error(f"❌ Gmail sync failed: {str(e)}")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-# New helper endpoint to handle authentication
 @router.get("/authenticate-gmail")
 async def authenticate_gmail_account():
     """
-    Handle OAuth authentication for Gmail (step 1)
-    This route will trigger the OAuth flow if no token is present or if authentication is required.
+    Starts the Gmail OAuth authentication process if needed.
+    This is the first step to ensure the app can access Gmail inbox.
     """
     try:
-        authenticate_gmail()  # Initiates OAuth process
+        logging.info("🔑 Starting Gmail authentication process...")
+        authenticate_gmail()  # Ensure that the Gmail API OAuth process is triggered
         return {"message": "Please visit the authentication URL to grant access to your Gmail account."}
     except Exception as e:
-        logging.error("❌ Gmail authentication failed: %s", str(e))
+        logging.error(f"❌ Gmail authentication failed: {str(e)}")
         return JSONResponse(status_code=500, content={"error": "Authentication failed", "details": str(e)})
-@router.get("/fetch-and-run")
-async def fetch_and_run():
-    try:
-        inbox = get_gmail_inbox()
-        result = run_workflow(inbox)
-        global latest_result
-        latest_result = result
-        return result
-    except Exception as e:
-        logging.error("❌ fetch-and-run failed: %s", str(e))
-        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+

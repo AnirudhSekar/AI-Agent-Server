@@ -39,7 +39,7 @@ def authenticate_gmail():
     return creds
 
 
-def get_gmail_inbox(max_results=10):
+def get_gmail_inbox(max_results=1):
     """
     Fetches the Gmail inbox and returns the email details.
     This function ensures that authentication is done before fetching the inbox.
